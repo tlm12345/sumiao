@@ -165,78 +165,123 @@ export function useProjectStorage() {
   }
 
   /**
+   * 检查是否支持 File System Access API 的文件夹选择功能
+   */
+  function isFileSystemAccessSupported(): boolean {
+    // 必须在安全上下文（HTTPS 或 localhost）
+    const isSecureContext = window.isSecureContext
+    // 必须支持 showDirectoryPicker
+    const hasDirectoryPicker = 'showDirectoryPicker' in window
+
+    console.log('File System Access API 检测:', {
+      isSecureContext,
+      hasDirectoryPicker,
+      protocol: window.location.protocol,
+      hostname: window.location.hostname
+    })
+
+    return isSecureContext && hasDirectoryPicker
+  }
+
+  /**
+   * 从 File System Access API 的目录句柄中读取项目
+   */
+  async function readProjectFromDirectoryHandle(dirHandle: FileSystemDirectoryHandle): Promise<ImportResult> {
+    // 读取 project.json
+    let projectData: ProjectData
+    try {
+      const jsonHandle = await dirHandle.getFileHandle('project.json')
+      const jsonFile = await jsonHandle.getFile()
+      const jsonText = await jsonFile.text()
+      projectData = JSON.parse(jsonText)
+    } catch {
+      // 如果没有 project.json，尝试从 image.png 加载（仅图像）
+      try {
+        const imageHandle = await dirHandle.getFileHandle('image.png')
+        const imageFile = await imageHandle.getFile()
+        const imageData = await fileToImageData(imageFile)
+        return {
+          imageData,
+          masks: new Map(),
+          pixelToMask: new Map()
+        }
+      } catch {
+        throw new Error('文件夹中未找到有效的项目文件（需要 project.json 或 image.png）')
+      }
+    }
+
+    // 解析项目数据
+    return parseProjectData(projectData)
+  }
+
+  /**
    * 从本地文件夹导入项目
-   * 优先使用 File System Access API，否则使用传统文件选择
+   * 优先使用 File System Access API，否则使用 webkitdirectory 属性
    */
   async function importProject(): Promise<ImportResult | null> {
     isImporting.value = true
     lastError.value = null
 
     try {
-      // 尝试使用 File System Access API
-      if ('showDirectoryPicker' in window) {
+      // 方式1：使用 File System Access API（现代浏览器，需要 HTTPS）
+      if (isFileSystemAccessSupported()) {
         try {
           const dirHandle = await (window as any).showDirectoryPicker()
-
-          // 读取 project.json
-          let projectData: ProjectData
-          try {
-            const jsonHandle = await dirHandle.getFileHandle('project.json')
-            const jsonFile = await jsonHandle.getFile()
-            const jsonText = await jsonFile.text()
-            projectData = JSON.parse(jsonText)
-          } catch {
-            // 如果没有 project.json，尝试从 image.png 加载（仅图像）
-            try {
-              const imageHandle = await dirHandle.getFileHandle('image.png')
-              const imageFile = await imageHandle.getFile()
-              const imageData = await fileToImageData(imageFile)
-              return {
-                imageData,
-                masks: new Map(),
-                pixelToMask: new Map()
-              }
-            } catch {
-              throw new Error('文件夹中未找到有效的项目文件（需要 project.json 或 image.png）')
-            }
-          }
-
-          // 解析项目数据
-          return parseProjectData(projectData)
+          const result = await readProjectFromDirectoryHandle(dirHandle)
+          return result
         } catch (err: any) {
           if (err.name === 'AbortError') {
             return null
           }
-          throw err
+          console.warn('File System Access API 调用失败，尝试备选方案:', err)
         }
       }
 
-      // 传统方式：使用文件选择
+      // 方式2：使用 webkitdirectory 属性（Chrome/Edge 支持，不需要 HTTPS）
       return new Promise((resolve) => {
         const input = document.createElement('input')
         input.type = 'file'
-        input.accept = '.json,image/png,image/jpeg'
+
+        // webkitdirectory 允许选择文件夹（Chrome/Edge 特性）
+        ;(input as any).webkitdirectory = true
+        ;(input as any).directory = true
+
         input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0]
-          if (!file) {
+          const files = (e.target as HTMLInputElement).files
+          if (!files || files.length === 0) {
             resolve(null)
             return
           }
 
           try {
-            if (file.name.endsWith('.json')) {
-              const text = await file.text()
+            // 在文件列表中查找 project.json 或 image.png
+            let jsonFile: File | null = null
+            let imageFile: File | null = null
+
+            for (const file of Array.from(files)) {
+              if (file.name === 'project.json') {
+                jsonFile = file
+                break
+              }
+              if (file.name === 'image.png' && !imageFile) {
+                imageFile = file
+              }
+            }
+
+            if (jsonFile) {
+              const text = await jsonFile.text()
               const projectData: ProjectData = JSON.parse(text)
               const result = await parseProjectData(projectData)
               resolve(result)
-            } else {
-              // 图像文件
-              const imageData = await fileToImageData(file)
+            } else if (imageFile) {
+              const imageData = await fileToImageData(imageFile)
               resolve({
                 imageData,
                 masks: new Map(),
                 pixelToMask: new Map()
               })
+            } else {
+              throw new Error('文件夹中未找到 project.json 或 image.png')
             }
           } catch (err: any) {
             lastError.value = err.message || '导入失败'
@@ -244,6 +289,7 @@ export function useProjectStorage() {
             resolve(null)
           }
         }
+
         input.click()
       })
     } catch (err: any) {
@@ -323,11 +369,152 @@ export function useProjectStorage() {
     return { imageData, masks, pixelToMask }
   }
 
+  /**
+   * 递归读取文件夹中的所有文件
+   */
+  async function readDirectoryRecursive(dirEntry: FileSystemDirectoryEntry): Promise<File[]> {
+    const files: File[] = []
+
+    const readEntries = async (reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> => {
+      return new Promise((resolve, reject) => {
+        reader.readEntries(resolve, reject)
+      })
+    }
+
+    const getFile = async (fileEntry: FileSystemFileEntry): Promise<File> => {
+      return new Promise((resolve, reject) => {
+        fileEntry.file(resolve, reject)
+      })
+    }
+
+    const traverse = async (entry: FileSystemEntry): Promise<void> => {
+      if (entry.isFile) {
+        const file = await getFile(entry as FileSystemFileEntry)
+        files.push(file)
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader()
+        let entries = await readEntries(reader)
+        while (entries.length > 0) {
+          for (const childEntry of entries) {
+            await traverse(childEntry)
+          }
+          entries = await readEntries(reader)
+        }
+      }
+    }
+
+    await traverse(dirEntry)
+    return files
+  }
+
+  /**
+   * 从文件列表中导入项目
+   */
+  async function importFromFiles(files: File[]): Promise<ImportResult | null> {
+    if (!files || files.length === 0) return null
+
+    // 查找 project.json 或 image.png
+    let jsonFile: File | null = null
+    let imageFile: File | null = null
+
+    for (const file of files) {
+      // 处理文件路径，只取文件名进行比较
+      const fileName = file.name.split('/').pop()?.split('\\').pop() || file.name
+
+      if (fileName === 'project.json') {
+        jsonFile = file
+        break
+      }
+      if (fileName === 'image.png' && !imageFile) {
+        imageFile = file
+      }
+    }
+
+    if (jsonFile) {
+      const text = await jsonFile.text()
+      const projectData: ProjectData = JSON.parse(text)
+      return parseProjectData(projectData)
+    } else if (imageFile) {
+      const imageData = await fileToImageData(imageFile)
+      return {
+        imageData,
+        masks: new Map(),
+        pixelToMask: new Map()
+      }
+    } else {
+      throw new Error('文件夹中未找到 project.json 或 image.png')
+    }
+  }
+
+  /**
+   * 从拖拽的数据传输项中导入项目
+   * 支持拖拽文件夹（使用 webkitdirectory API）
+   */
+  async function importFromDrop(dataTransfer: DataTransfer): Promise<ImportResult | null> {
+    isImporting.value = true
+    lastError.value = null
+
+    try {
+      const items = dataTransfer.items
+
+      // 方法1: 使用 webkitGetAsEntry API（支持文件夹拖拽）
+      if (items && items.length > 0) {
+        for (const item of Array.from(items)) {
+          const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null
+
+          if (entry) {
+            if (entry.isDirectory) {
+              // 拖拽的是文件夹，递归读取所有文件
+              const files = await readDirectoryRecursive(entry as FileSystemDirectoryEntry)
+              return await importFromFiles(files)
+            } else if (entry.isFile) {
+              // 拖拽的是单个文件
+              const file = await new Promise<File>((resolve, reject) => {
+                (entry as FileSystemFileEntry).file(resolve, reject)
+              })
+
+              if (file.name.endsWith('.json')) {
+                const text = await file.text()
+                const projectData: ProjectData = JSON.parse(text)
+                return parseProjectData(projectData)
+              } else if (file.type.startsWith('image/') || file.name.endsWith('.png') || file.name.endsWith('.jpg')) {
+                const imageData = await fileToImageData(file)
+                return {
+                  imageData,
+                  masks: new Map(),
+                  pixelToMask: new Map()
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 方法2: 回退到 dataTransfer.files（不支持文件夹，只能读取单个文件）
+      const files = dataTransfer.files
+      if (files && files.length > 0) {
+        // 尝试将所有 files 转换为数组并导入
+        const fileArray = Array.from(files)
+        return await importFromFiles(fileArray)
+      }
+
+      return null
+    } catch (err: any) {
+      lastError.value = err.message || '导入失败'
+      console.error('拖拽导入失败:', err)
+      return null
+    } finally {
+      isImporting.value = false
+    }
+  }
+
   return {
     isImporting,
     isExporting,
     lastError,
+    isFileSystemAccessSupported,
     exportProject,
-    importProject
+    importProject,
+    importFromDrop
   }
 }

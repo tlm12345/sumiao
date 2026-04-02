@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { Mode, Point, Mask } from '@/types'
 import { useFloodFill } from '@/composables/useFloodFill'
 import { useMasks } from '@/composables/useMasks'
@@ -36,7 +36,7 @@ const {
   addPixelsToMask,
   loadFromImport
 } = useMasks()
-const { importProject, exportProject, isExporting, lastError } = useProjectStorage()
+const { importProject, exportProject, importFromDrop, isFileSystemAccessSupported, isExporting, lastError } = useProjectStorage()
 
 const {
   scale,
@@ -110,6 +110,43 @@ const handleExportProject = async () => {
   } else if (lastError.value) {
     alert('导出失败: ' + lastError.value)
   }
+}
+
+// Drag and drop handling
+const isDraggingOver = ref(false)
+
+const handleDragOver = (e: DragEvent) => {
+  e.preventDefault()
+  isDraggingOver.value = true
+}
+
+const handleDragLeave = (e: DragEvent) => {
+  e.preventDefault()
+  isDraggingOver.value = false
+}
+
+const handleDrop = async (e: DragEvent) => {
+  e.preventDefault()
+  isDraggingOver.value = false
+
+  if (!e.dataTransfer) return
+
+  const result = await importFromDrop(e.dataTransfer)
+  if (!result) return
+
+  // Restore image data
+  imageData.value = result.imageData
+  setImageSize(result.imageData.width, result.imageData.height)
+  if (containerRef.value) {
+    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+  }
+
+  // Restore masks and pixel mapping
+  loadFromImport(result.masks, result.pixelToMask)
+
+  // Automatically enter fill mode and lock canvas
+  mode.value = 'fill'
+  canvasLocked.value = true
 }
 
 // Canvas click handling - now receives screen coordinates
@@ -289,6 +326,29 @@ const handleClearAllMasks = () => {
 const handleFinishCurrentMask = () => {
   setActiveMask(null)
 }
+
+// Global drag and drop prevention to stop browser from opening files in new tabs
+const preventGlobalDrag = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+const handleGlobalDrop = (e: DragEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+// Register global listeners on mount
+onMounted(() => {
+  document.addEventListener('dragover', preventGlobalDrag)
+  document.addEventListener('drop', handleGlobalDrop)
+})
+
+// Clean up listeners on unmount
+onUnmounted(() => {
+  document.removeEventListener('dragover', preventGlobalDrag)
+  document.removeEventListener('drop', handleGlobalDrop)
+})
 </script>
 
 <template>
@@ -358,7 +418,21 @@ const handleFinishCurrentMask = () => {
       </aside>
 
       <!-- Main canvas area -->
-      <main ref="containerRef" class="canvas-area">
+      <main
+        ref="containerRef"
+        class="canvas-area"
+        @dragover="handleDragOver"
+        @dragleave="handleDragLeave"
+        @drop="handleDrop"
+      >
+        <!-- Drag overlay -->
+        <div v-if="isDraggingOver" class="drag-overlay">
+          <div class="drag-content">
+            <p class="drag-title">📂 释放以导入项目</p>
+            <p class="drag-hint">支持拖拽包含 project.json 的文件夹</p>
+          </div>
+        </div>
+
         <ImageCanvas
           v-if="imageData"
           :mode="mode"
@@ -374,9 +448,10 @@ const handleFinishCurrentMask = () => {
           @update:offset="offset = $event"
         />
 
-        <div v-else class="empty-canvas">
+        <div v-else class="empty-canvas" :class="{ 'drag-active': isDraggingOver }">
           <p>点击左上角「上传图片」开始</p>
           <p class="hint">支持 JPG, PNG 等常见格式</p>
+          <p class="hint">或拖拽项目文件夹到此处导入</p>
         </div>
 
         <!-- Zoom controls -->
@@ -578,5 +653,42 @@ const handleFinishCurrentMask = () => {
   font-size: 12px;
   color: #888;
   text-align: center;
+}
+
+/* Drag and drop overlay */
+.drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(74, 144, 217, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  border: 4px dashed #fff;
+}
+
+.drag-content {
+  text-align: center;
+  color: #fff;
+}
+
+.drag-title {
+  font-size: 24px;
+  font-weight: 500;
+  margin: 0 0 8px 0;
+}
+
+.drag-hint {
+  font-size: 14px;
+  margin: 0;
+  opacity: 0.9;
+}
+
+.empty-canvas.drag-active {
+  background: rgba(74, 144, 217, 0.2);
+  border: 4px dashed #4a90d9;
 }
 </style>
