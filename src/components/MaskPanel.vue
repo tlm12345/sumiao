@@ -5,6 +5,7 @@ import type { Mask } from '@/types'
 const props = defineProps<{
   masks: Map<string, Mask>
   activeMaskId: string | null
+  showExport?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,6 +15,7 @@ const emit = defineEmits<{
   (e: 'toggleVisibility', id: string): void
   (e: 'clearAll'): void
   (e: 'finishCurrent'): void
+  (e: 'export'): void
 }>()
 
 const maskList = () => Array.from(props.masks.values())
@@ -102,6 +104,13 @@ const cancelRename = () => {
         </button>
       </li>
     </ul>
+
+    <div v-if="showExport && masks.size > 0" class="export-section">
+      <button class="btn-export" @click="emit('export')">
+        💾 导出项目
+      </button>
+      <p class="export-hint">保存掩码数据，下次可直接导入</p>
+    </div>
   </div>
 </template>
 
@@ -260,5 +269,35 @@ const cancelRename = () => {
 
 .delete-btn:hover {
   opacity: 1;
+}
+
+.export-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #444;
+}
+
+.btn-export {
+  width: 100%;
+  background: #27ae60;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-export:hover {
+  background: #2ecc71;
+}
+
+.export-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: #888;
+  text-align: center;
 }
 </style>

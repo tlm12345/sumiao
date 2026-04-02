@@ -114,6 +114,18 @@ export function useMasks() {
     })
   }
 
+  /**
+   * 从导入的数据加载掩码状态
+   */
+  function loadFromImport(
+    importedMasks: Map<string, Mask>,
+    importedPixelToMask: Map<number, string>
+  ): void {
+    masks.value = importedMasks
+    pixelToMask.value = importedPixelToMask
+    activeMaskId.value = null
+  }
+
   return {
     masks,
     activeMaskId,
@@ -129,6 +141,7 @@ export function useMasks() {
     getMaskAtPixel,
     clearAllMasks,
     isPixelInMask,
-    addPixelsToMask
+    addPixelsToMask,
+    loadFromImport
   }
 }

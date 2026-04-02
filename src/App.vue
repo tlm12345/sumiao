@@ -10,6 +10,7 @@ import MaskPanel from '@/components/MaskPanel.vue'
 import ColorPalette from '@/components/ColorPalette.vue'
 import ModeSwitcher from '@/components/ModeSwitcher.vue'
 import ThresholdSlider from '@/components/ThresholdSlider.vue'
+import { useProjectStorage } from '@/composables/useProjectStorage'
 
 // State
 const mode = ref<Mode>('segment')
@@ -32,8 +33,10 @@ const {
   setMaskFillColor,
   getMaskAtPixel,
   clearAllMasks,
-  addPixelsToMask
+  addPixelsToMask,
+  loadFromImport
 } = useMasks()
+const { importProject, exportProject, isExporting, lastError } = useProjectStorage()
 
 const {
   scale,
@@ -77,6 +80,36 @@ const handleFileSelect = (e: Event) => {
 
 const triggerFileInput = () => {
   fileInputRef.value?.click()
+}
+
+// Project import/export handling
+const handleImportProject = async () => {
+  const result = await importProject()
+  if (!result) return
+
+  // Restore image data
+  imageData.value = result.imageData
+  setImageSize(result.imageData.width, result.imageData.height)
+  if (containerRef.value) {
+    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+  }
+
+  // Restore masks and pixel mapping
+  loadFromImport(result.masks, result.pixelToMask)
+
+  // Automatically enter fill mode and lock canvas
+  mode.value = 'fill'
+  canvasLocked.value = true
+}
+
+const handleExportProject = async () => {
+  if (!imageData.value) return
+  const success = await exportProject(imageData.value, masks.value)
+  if (success) {
+    alert('项目导出成功！')
+  } else if (lastError.value) {
+    alert('导出失败: ' + lastError.value)
+  }
 }
 
 // Canvas click handling - now receives screen coordinates
@@ -263,6 +296,9 @@ const handleFinishCurrentMask = () => {
     <header class="app-header">
       <h1>素描上色工具</h1>
       <div class="header-actions">
+        <button class="btn-import" @click="handleImportProject" :disabled="isExporting">
+          📂 导入项目
+        </button>
         <button class="btn-upload" @click="triggerFileInput">
           📁 上传图片
         </button>
@@ -302,12 +338,14 @@ const handleFinishCurrentMask = () => {
         <MaskPanel
           :masks="masks"
           :active-mask-id="activeMaskId"
+          :show-export="mode === 'segment'"
           @select="handleMaskSelect"
           @delete="handleMaskDelete"
           @rename="handleMaskRename"
           @toggle-visibility="handleMaskToggleVisibility"
           @clear-all="handleClearAllMasks"
           @finish-current="handleFinishCurrentMask"
+          @export="handleExportProject"
         />
 
         <ColorPalette
@@ -379,7 +417,8 @@ const handleFinishCurrentMask = () => {
 
 .header-actions {
   display: flex;
-  gap: 8px;
+  gap: 12px;
+  align-items: center;
 }
 
 .btn-upload {
@@ -395,6 +434,26 @@ const handleFinishCurrentMask = () => {
 
 .btn-upload:hover {
   background: #6ab0f9;
+}
+
+.btn-import {
+  background: #27ae60;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.btn-import:hover {
+  background: #2ecc71;
+}
+
+.btn-import:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .file-input {

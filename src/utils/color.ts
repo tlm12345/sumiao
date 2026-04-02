@@ -7,9 +7,9 @@ export interface RGB {
 export function getPixelColor(imageData: ImageData, x: number, y: number): RGB {
   const idx = (y * imageData.width + x) * 4
   return {
-    r: imageData.data[idx],
-    g: imageData.data[idx + 1],
-    b: imageData.data[idx + 2]
+    r: imageData.data[idx] ?? 0,
+    g: imageData.data[idx + 1] ?? 0,
+    b: imageData.data[idx + 2] ?? 0
   }
 }
 
@@ -27,7 +27,7 @@ export function rgbToHex(r: number, g: number, b: number): string {
 
 export function hexToRgb(hex: string): RGB | null {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  if (!result) return null
+  if (!result || !result[1] || !result[2] || !result[3]) return null
   return {
     r: parseInt(result[1], 16),
     g: parseInt(result[2], 16),
