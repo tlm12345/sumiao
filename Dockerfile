@@ -18,22 +18,25 @@ RUN npm run build-only
 # 阶段2：生产运行阶段，使用最小化镜像
 FROM nginx:alpine-slim AS production
 
+# 安装必要的工具（用于entrypoint脚本）
+RUN apk add --no-cache openssl
+
+# 创建证书目录
+RUN mkdir -p /etc/nginx/certs
+
+# 拷贝宿主机上的证书文件到容器中
+COPY ./certs/fullchain.pem /etc/nginx/certs/fullchain.pem
+COPY ./certs/privkey.pem /etc/nginx/certs/privkey.pem
+
 # 复制构建产物到nginx目录
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# 复制自定义nginx配置（可选，用于支持前端路由）
-RUN echo 'server { \
-    listen 80; \
-    server_name localhost; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-    gzip on; \
-    gzip_types text/plain text/css application/json application/javascript text/xml image/svg+xml; \
-}' > /etc/nginx/conf.d/default.conf
+# 复制entrypoint脚本
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-EXPOSE 80
+# 暴露80和443端口
+EXPOSE 80 443
 
-CMD ["nginx", "-g", "daemon off;"]
+# 使用entrypoint脚本启动
+ENTRYPOINT ["/entrypoint.sh"]
