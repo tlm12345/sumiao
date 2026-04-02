@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import type { Mask, Mode, Point } from '@/types'
+import { hexToRgb } from '@/utils/color'
+import { iterateMaskPixels, decodeMaskPixels } from '@/utils/maskEncoding'
 
 const props = defineProps<{
   mode: Mode
@@ -11,6 +13,8 @@ const props = defineProps<{
   offset: Point
   threshold: number
   locked?: boolean
+  mergedMaskMatrix?: Uint32Array | null
+  maskIdToNumber?: Map<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +31,7 @@ const isDragging = ref(false)
 const dragStart = ref<Point>({ x: 0, y: 0 })
 const offsetStart = ref<Point>({ x: 0, y: 0 })
 
-// Render canvas
+// Optimized render using batch drawing via ImageData
 const renderCanvas = () => {
   const canvas = canvasRef.value
   if (!canvas || !props.imageData) return
@@ -55,30 +59,101 @@ const renderCanvas = () => {
     ctx.drawImage(tempCanvas, 0, 0)
   }
 
-  // Draw mask overlays
+  // Build a color cache for masks to avoid repeated hexToRgb calls
+  const colorCache = new Map<string, { r: number; g: number; b: number }>()
+
+  // Get all visible masks with fill colors
+  const visibleFilledMasks = new Map<string, Mask>()
   props.masks.forEach(mask => {
-    if (!mask.visible) return
-
-    // Draw fill color if set
-    if (mask.fillColor) {
-      ctx.fillStyle = mask.fillColor + '80' // 50% opacity
-      mask.pixels.forEach(idx => {
-        const x = idx % props.imageData!.width
-        const y = Math.floor(idx / props.imageData!.width)
-        ctx.fillRect(x, y, 1, 1)
-      })
-    }
-
-    // Highlight active mask with light blue overlay
-    if (mask.id === props.activeMaskId && props.mode === 'segment') {
-      ctx.fillStyle = 'rgba(135, 206, 250, 0.5)' // Light blue with 50% opacity
-      mask.pixels.forEach(idx => {
-        const x = idx % props.imageData!.width
-        const y = Math.floor(idx / props.imageData!.width)
-        ctx.fillRect(x, y, 1, 1)
-      })
+    if (mask.visible && mask.fillColor) {
+      visibleFilledMasks.set(mask.id, mask)
     }
   })
+
+  // If we have merged mask matrix and fill mode, use optimized batch rendering
+  if (props.mergedMaskMatrix && visibleFilledMasks.size > 0 && props.maskIdToNumber) {
+    const { width, height } = props.imageData
+    const overlayImageData = ctx.createImageData(width, height)
+    const data = overlayImageData.data
+
+    // Build maskNumber -> color map directly using maskIdToNumber
+    // This avoids rebuilding pixel->maskId map on every render
+    const maskNumberToColor = new Map<number, { r: number; g: number; b: number }>()
+    visibleFilledMasks.forEach((mask, id) => {
+      const maskNumber = props.maskIdToNumber!.get(id)
+      if (maskNumber === undefined) return
+
+      const color = mask.fillColor!
+      let rgb = colorCache.get(color)
+      if (!rgb) {
+        const newRgb = hexToRgb(color)
+        if (newRgb) {
+          rgb = newRgb
+          colorCache.set(color, rgb)
+        }
+      }
+      if (rgb) {
+        maskNumberToColor.set(maskNumber, rgb)
+      }
+    })
+
+    // Fill the overlay ImageData - direct lookup by mask number
+    for (let i = 0; i < props.mergedMaskMatrix.length; i++) {
+      const maskNumber = props.mergedMaskMatrix[i]!
+      if (maskNumber === 0) continue
+
+      const color = maskNumberToColor.get(maskNumber)
+      if (!color) continue
+
+      const idx = i * 4
+      data[idx] = color.r
+      data[idx + 1] = color.g
+      data[idx + 2] = color.b
+      data[idx + 3] = 128 // 50% opacity
+    }
+
+    // Create a temporary canvas for the overlay to enable alpha blending
+    const overlayCanvas = document.createElement('canvas')
+    overlayCanvas.width = width
+    overlayCanvas.height = height
+    const overlayCtx = overlayCanvas.getContext('2d')
+    if (overlayCtx) {
+      overlayCtx.putImageData(overlayImageData, 0, 0)
+      // Draw with alpha blending - this preserves the original image underneath
+      ctx.drawImage(overlayCanvas, 0, 0)
+    }
+  } else {
+    // Fallback to original method for segment mode or when no matrix available
+    props.masks.forEach(mask => {
+      if (!mask.visible) return
+
+      // Draw fill color if set
+      if (mask.fillColor) {
+        ctx.fillStyle = mask.fillColor + '80' // 50% opacity
+        // 使用迭代器遍历新的 rows 格式
+        for (const idx of iterateMaskPixels(mask.rows, props.imageData!.width)) {
+          const x = idx % props.imageData!.width
+          const y = Math.floor(idx / props.imageData!.width)
+          ctx.fillRect(x, y, 1, 1)
+        }
+      }
+    })
+  }
+
+  // Always render active mask highlight (segment mode) using original method
+  // This is typically small and doesn't need optimization
+  if (props.mode === 'segment' && props.activeMaskId) {
+    const activeMask = props.masks.get(props.activeMaskId)
+    if (activeMask && activeMask.visible) {
+      ctx.fillStyle = 'rgba(135, 206, 250, 0.5)' // Light blue with 50% opacity
+      // 使用迭代器遍历新的 rows 格式
+      for (const idx of iterateMaskPixels(activeMask.rows, props.imageData!.width)) {
+        const x = idx % props.imageData!.width
+        const y = Math.floor(idx / props.imageData!.width)
+        ctx.fillRect(x, y, 1, 1)
+      }
+    }
+  }
 
   ctx.restore()
 }
@@ -89,6 +164,7 @@ watch(() => props.masks, renderCanvas, { deep: true })
 watch(() => props.activeMaskId, renderCanvas)
 watch(() => props.scale, renderCanvas)
 watch(() => props.offset, renderCanvas, { deep: true })
+watch(() => props.mergedMaskMatrix, renderCanvas)
 
 // Handle click - emit screen coordinates
 const handleClick = (e: MouseEvent) => {

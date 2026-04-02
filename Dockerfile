@@ -25,8 +25,8 @@ RUN apk add --no-cache openssl
 RUN mkdir -p /etc/nginx/certs
 
 # 拷贝宿主机上的证书文件到容器中
-COPY ./certs/fullchain.pem /etc/nginx/certs/fullchain.pem
-COPY ./certs/privkey.pem /etc/nginx/certs/privkey.pem
+COPY ./certs/fullchain.pem /etc/nginx/certs/cert.pem
+COPY ./certs/privkey.pem /etc/nginx/certs/key.pem
 
 # 复制构建产物到nginx目录
 COPY --from=builder /app/dist /usr/share/nginx/html

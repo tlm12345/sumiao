@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { Mode, Point, Mask } from '@/types'
 import { useFloodFill } from '@/composables/useFloodFill'
 import { useMasks } from '@/composables/useMasks'
@@ -11,12 +11,19 @@ import ColorPalette from '@/components/ColorPalette.vue'
 import ModeSwitcher from '@/components/ModeSwitcher.vue'
 import ThresholdSlider from '@/components/ThresholdSlider.vue'
 import { useProjectStorage } from '@/composables/useProjectStorage'
+import { useMergedMask } from '@/composables/useMergedMask'
 
 // State
 const mode = ref<Mode>('segment')
 const imageData = ref<ImageData | null>(null)
 const threshold = ref(30)
 const clickedMaskId = ref<string | null>(null)
+const selectedColor = ref<string | null>(null)  // 当前选中的颜色
+const isPaletteCollapsed = ref(false)  // 调色板是否收缩
+
+// Image dimensions (needed for mask encoding)
+const imageWidth = ref(0)
+const imageHeight = ref(0)
 
 // Composables
 const { floodFill } = useFloodFill()
@@ -34,8 +41,13 @@ const {
   getMaskAtPixel,
   clearAllMasks,
   addPixelsToMask,
-  loadFromImport
-} = useMasks()
+  loadFromImport,
+  setImageSize: setMaskImageSize,
+  rebuildPixelToMask
+} = useMasks({
+  imageWidth: imageWidth,
+  imageHeight: imageHeight
+})
 const { importProject, exportProject, importFromDrop, isFileSystemAccessSupported, isExporting, lastError } = useProjectStorage()
 
 const {
@@ -45,6 +57,12 @@ const {
   updateContainerSize,
   screenToImage
 } = useImageScale()
+
+const {
+  mergedMaskMatrix,
+  maskIdToNumber,
+  rebuildMatrix
+} = useMergedMask(imageData, masks)
 
 // File upload handling
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -65,6 +83,9 @@ const handleFileSelect = (e: Event) => {
         ctx.drawImage(img, 0, 0)
         imageData.value = ctx.getImageData(0, 0, img.width, img.height)
         setImageSize(img.width, img.height)
+        // Update dimensions for mask encoding
+        imageWidth.value = img.width
+        imageHeight.value = img.height
         if (containerRef.value) {
           updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
         }
@@ -87,15 +108,27 @@ const handleImportProject = async () => {
   const result = await importProject()
   if (!result) return
 
-  // Restore image data
+  // Restore image data first (needed for mask encoding)
   imageData.value = result.imageData
-  setImageSize(result.imageData.width, result.imageData.height)
-  if (containerRef.value) {
-    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
-  }
+  imageWidth.value = result.imageData.width
+  imageHeight.value = result.imageData.height
+  setMaskImageSize(result.imageData.width, result.imageData.height)
 
   // Restore masks and pixel mapping
   loadFromImport(result.masks, result.pixelToMask)
+
+  // Wait for DOM update then calculate image position
+  await nextTick()
+
+  if (containerRef.value) {
+    // Set container size first (this calculates initial scale and centers image)
+    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+  }
+  // Also set image size to ensure scale is calculated
+  setImageSize(result.imageData.width, result.imageData.height)
+
+  // Rebuild merged mask matrix for performance (after masks are loaded)
+  rebuildMatrix()
 
   // Automatically enter fill mode and lock canvas
   mode.value = 'fill'
@@ -134,15 +167,27 @@ const handleDrop = async (e: DragEvent) => {
   const result = await importFromDrop(e.dataTransfer)
   if (!result) return
 
-  // Restore image data
+  // Restore image data first (needed for mask encoding)
   imageData.value = result.imageData
-  setImageSize(result.imageData.width, result.imageData.height)
-  if (containerRef.value) {
-    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
-  }
+  imageWidth.value = result.imageData.width
+  imageHeight.value = result.imageData.height
+  setMaskImageSize(result.imageData.width, result.imageData.height)
 
   // Restore masks and pixel mapping
   loadFromImport(result.masks, result.pixelToMask)
+
+  // Wait for DOM update then calculate image position
+  await nextTick()
+
+  if (containerRef.value) {
+    // Set container size first (this calculates initial scale and centers image)
+    updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+  }
+  // Also set image size to ensure scale is calculated
+  setImageSize(result.imageData.width, result.imageData.height)
+
+  // Rebuild merged mask matrix for performance (after masks are loaded)
+  rebuildMatrix()
 
   // Automatically enter fill mode and lock canvas
   mode.value = 'fill'
@@ -211,7 +256,11 @@ const handleCanvasClick = async (screenPoint: Point) => {
     const mask = getMaskAtPixel(pixelIdx)
 
     if (mask) {
-      // Select this mask for filling
+      // If a color is selected, fill the mask directly
+      if (selectedColor.value) {
+        setMaskFillColor(mask.id, selectedColor.value)
+      }
+      // Track clicked mask for reference (optional, for UI feedback)
       clickedMaskId.value = mask.id
     } else {
       // Clicked outside any mask, deselect
@@ -220,12 +269,9 @@ const handleCanvasClick = async (screenPoint: Point) => {
   }
 }
 
-// Color palette handling - apply color to selected mask
+// Color palette handling - just store the selected color
 const handleColorSelect = (color: string) => {
-  if (clickedMaskId.value) {
-    setMaskFillColor(clickedMaskId.value, color)
-    // Keep the mask selected for potential color changes
-  }
+  selectedColor.value = color
 }
 
 // Get the name of currently selected mask for filling
@@ -290,8 +336,12 @@ watch(mode, (newMode) => {
   } else if (newMode === 'fill') {
     // Deselect any active mask
     setActiveMask(null)
-    // Clear any selected mask for filling
+    // Clear clicked mask reference
     clickedMaskId.value = null
+    // Note: selectedColor is preserved so user can continue with same color
+
+    // Rebuild merged mask matrix for optimized rendering
+    rebuildMatrix()
   }
 })
 
@@ -408,13 +458,6 @@ onUnmounted(() => {
           @export="handleExportProject"
         />
 
-        <ColorPalette
-          v-if="mode === 'fill'"
-          :visible="mode === 'fill'"
-          :selected-mask-id="clickedMaskId"
-          :selected-mask-name="selectedMaskName"
-          @select="handleColorSelect"
-        />
       </aside>
 
       <!-- Main canvas area -->
@@ -443,6 +486,8 @@ onUnmounted(() => {
           :offset="offset"
           :threshold="threshold"
           :locked="canvasLocked"
+          :merged-mask-matrix="mergedMaskMatrix"
+          :mask-id-to-number="maskIdToNumber"
           @pixel-click="handleCanvasClick"
           @update:scale="scale = $event"
           @update:offset="offset = $event"
@@ -462,6 +507,14 @@ onUnmounted(() => {
           <button @click="resetZoom" title="重置" :disabled="canvasLocked">⟲</button>
         </div>
       </main>
+
+      <!-- Right side color palette -->
+      <ColorPalette
+        v-if="mode === 'fill'"
+        v-model:collapsed="isPaletteCollapsed"
+        :selected-color="selectedColor"
+        @select="handleColorSelect"
+      />
     </div>
   </div>
 </template>

@@ -1,5 +1,6 @@
 import { ref, computed, watch, type Ref } from 'vue'
 import type { Mask, Point } from '@/types'
+import { decodeMaskPixels, iterateMaskPixels } from '@/utils/maskEncoding'
 
 export interface ScreenMask {
   maskId: string
@@ -49,7 +50,8 @@ export function useScreenMasks(
       let maxX = -Infinity
       let maxY = -Infinity
 
-      mask.pixels.forEach(pixelIdx => {
+      // 使用迭代器遍历掩码像素，避免一次性解码所有像素
+      for (const pixelIdx of iterateMaskPixels(mask.rows, imageWidth.value)) {
         // 将原始像素索引转换为原始坐标
         const origX = pixelIdx % imageWidth.value
         const origY = Math.floor(pixelIdx / imageWidth.value)
@@ -65,7 +67,7 @@ export function useScreenMasks(
         minY = Math.min(minY, screenY)
         maxX = Math.max(maxX, screenX)
         maxY = Math.max(maxY, screenY)
-      })
+      }
 
       if (screenPixels.size > 0) {
         newScreenMasks.set(maskId, {
@@ -124,7 +126,7 @@ export function useScreenMasks(
     () => Array.from(masks.value.values()).map(m => ({
       id: m.id,
       visible: m.visible,
-      pixelCount: m.pixels.size
+      pixelCount: m.pixelCount || 0
     })),
     () => {
       generateScreenMasks()

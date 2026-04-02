@@ -3,13 +3,39 @@ export interface Point {
   y: number
 }
 
+// 每行的掩码存储格式：0 表示无掩码，或 [startCol, endCol] 区间数组
+export type RowMask = 0 | [number, number][]
+
+// 掩码边界框
+export interface MaskBounds {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
 export interface Mask {
   id: string
   name: string
-  pixels: Set<number>  // 原始图像坐标系下的像素索引
+  // 新格式：按行存储的区间计数法
+  rows: RowMask[]
+  // 边界框，用于快速命中测试
+  bounds: MaskBounds
   fillColor: string | null
   visible: boolean
   createdAtScale: number  // 创建时的缩放比例
+  // 缓存：像素数量（延迟计算）
+  pixelCount?: number
+}
+
+// 兼容旧格式的 Mask 数据（导入时使用）
+export interface LegacyMask {
+  id: string
+  name: string
+  pixels: number[]  // 旧格式：扁平像素索引数组
+  fillColor: string | null
+  visible: boolean
+  createdAtScale: number
 }
 
 export type Mode = 'segment' | 'fill'

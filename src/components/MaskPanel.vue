@@ -90,7 +90,7 @@ const cancelRename = () => {
           <span v-else class="mask-name" @dblclick.stop="startRename(mask)">
             {{ mask.name }}
           </span>
-          <span class="pixel-count">{{ mask.pixels.size.toLocaleString() }} 像素</span>
+          <span class="pixel-count">{{ (mask.pixelCount || 0).toLocaleString() }} 像素</span>
         </div>
 
         <div
