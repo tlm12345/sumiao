@@ -3,6 +3,7 @@ import type { Mode } from '@/types'
 
 const props = defineProps<{
   mode: Mode
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -20,7 +21,8 @@ const modes: { value: Mode; label: string; icon: string; description: string }[]
     <button
       v-for="m in modes"
       :key="m.value"
-      :class="['mode-btn', { active: mode === m.value }]"
+      :class="['mode-btn', { active: mode === m.value, disabled: disabled }]"
+      :disabled="disabled"
       @click="emit('update:mode', m.value)"
     >
       <span class="mode-icon">{{ m.icon }}</span>
@@ -52,8 +54,13 @@ const modes: { value: Mode; label: string; icon: string; description: string }[]
   transition: all 0.2s;
 }
 
-.mode-btn:hover {
+.mode-btn:hover:not(:disabled) {
   background: #444;
+}
+
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .mode-btn.active {

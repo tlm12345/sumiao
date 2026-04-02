@@ -10,6 +10,7 @@ const props = defineProps<{
   scale: number
   offset: Point
   threshold: number
+  locked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -106,6 +107,7 @@ const handleClick = (e: MouseEvent) => {
 
 // Handle mouse down for panning
 const handleMouseDown = (e: MouseEvent) => {
+  if (props.locked) return
   if (e.button === 1 || (e.button === 0 && e.altKey)) {
     isDragging.value = true
     dragStart.value = { x: e.clientX, y: e.clientY }
@@ -134,6 +136,7 @@ const handleMouseUp = () => {
 
 // Handle wheel for zooming
 const handleWheel = (e: WheelEvent) => {
+  if (props.locked) return
   e.preventDefault()
   const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
   const newScale = Math.max(0.1, Math.min(props.scale * zoomFactor, 5))
@@ -187,7 +190,7 @@ onUnmounted(() => {
   <div ref="containerRef" class="canvas-container">
     <canvas
       ref="canvasRef"
-      class="image-canvas"
+      :class="['image-canvas', { 'is-segment': locked && mode === 'segment' }]"
       @click="handleClick"
       @mousedown="handleMouseDown"
       @wheel.prevent="handleWheel"
@@ -206,6 +209,10 @@ onUnmounted(() => {
 
 .image-canvas {
   display: block;
+  cursor: default;
+}
+
+.image-canvas.is-segment {
   cursor: crosshair;
 }
 

@@ -62,7 +62,11 @@ const handleFileSelect = (e: Event) => {
         ctx.drawImage(img, 0, 0)
         imageData.value = ctx.getImageData(0, 0, img.width, img.height)
         setImageSize(img.width, img.height)
-        // Clear existing masks when loading new image
+        if (containerRef.value) {
+          updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+        }
+        // Reset lock and clear existing masks when loading new image
+        canvasLocked.value = false
         clearAllMasks()
       }
     }
@@ -164,6 +168,13 @@ const selectedMaskName = computed(() => {
   return selectedMaskForFill.value?.name || ''
 })
 
+// Canvas lock state
+const canvasLocked = ref(false)
+
+const toggleCanvasLock = () => {
+  canvasLocked.value = !canvasLocked.value
+}
+
 // Zoom controls
 const zoomIn = () => {
   scale.value = Math.min(scale.value * 1.2, 5)
@@ -176,6 +187,9 @@ const zoomOut = () => {
 const resetZoom = () => {
   if (imageData.value) {
     setImageSize(imageData.value.width, imageData.value.height)
+    if (containerRef.value) {
+      updateContainerSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+    }
   }
 }
 
@@ -266,7 +280,19 @@ const handleFinishCurrentMask = () => {
     <div class="app-body">
       <!-- Left sidebar -->
       <aside class="sidebar">
-        <ModeSwitcher v-model:mode="mode" />
+        <div class="lock-section">
+          <button
+            :class="['btn-lock', { locked: canvasLocked }]"
+            @click="toggleCanvasLock"
+          >
+            {{ canvasLocked ? '🔓 解锁画布' : '🔒 锁定画布' }}
+          </button>
+          <p v-if="!canvasLocked" class="lock-hint">
+            调整完成后请锁定画布以开始上色
+          </p>
+        </div>
+
+        <ModeSwitcher v-model:mode="mode" :disabled="!canvasLocked" />
 
         <ThresholdSlider
           v-if="mode === 'segment'"
@@ -304,6 +330,7 @@ const handleFinishCurrentMask = () => {
           :scale="scale"
           :offset="offset"
           :threshold="threshold"
+          :locked="canvasLocked"
           @pixel-click="handleCanvasClick"
           @update:scale="scale = $event"
           @update:offset="offset = $event"
@@ -316,10 +343,10 @@ const handleFinishCurrentMask = () => {
 
         <!-- Zoom controls -->
         <div v-if="imageData" class="zoom-controls">
-          <button @click="zoomOut" title="缩小">−</button>
+          <button @click="zoomOut" title="缩小" :disabled="canvasLocked">−</button>
           <span class="zoom-level">{{ Math.round(scale * 100) }}%</span>
-          <button @click="zoomIn" title="放大">+</button>
-          <button @click="resetZoom" title="重置">⟲</button>
+          <button @click="zoomIn" title="放大" :disabled="canvasLocked">+</button>
+          <button @click="resetZoom" title="重置" :disabled="canvasLocked">⟲</button>
         </div>
       </main>
     </div>
@@ -449,5 +476,48 @@ const handleFinishCurrentMask = () => {
   text-align: center;
   font-size: 13px;
   color: #ccc;
+}
+
+.zoom-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.lock-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-lock {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  background: #4a90d9;
+  color: white;
+}
+
+.btn-lock:hover {
+  background: #6ab0f9;
+}
+
+.btn-lock.locked {
+  background: #e74c3c;
+}
+
+.btn-lock.locked:hover {
+  background: #c0392b;
+}
+
+.lock-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #888;
+  text-align: center;
 }
 </style>

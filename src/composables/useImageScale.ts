@@ -25,7 +25,7 @@ export function useImageScale() {
 
     const scaleX = containerSize.value.width / imageSize.value.width
     const scaleY = containerSize.value.height / imageSize.value.height
-    scale.value = Math.min(scaleX, scaleY, 1) // Don't scale up beyond 1:1
+    scale.value = Math.min(scaleX, scaleY) // Fit image to container, allow upscaling
 
     // Center the image
     centerImage()

@@ -1,83 +1,61 @@
-# 素描上色应用 (Sumiao)
+# CLAUDE.md
 
-## 项目信息
-- **技术栈**: Vue 3 + TypeScript + Vite
-- **项目路径**: `G:\Project\sumiao\sumiao`
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 开发指令
+## Commands
 
-### 启动开发服务器
-```bash
-cd G:\Project\sumiao\sumiao && npm run dev
-```
+- `npm run dev` — Start the Vite dev server.
+- `npm run build` — Type-check and build for production.
+- `npm run build-only` — Build without type-checking.
+- `npm run type-check` — Run `vue-tsc --build` only.
+- `npm run preview` — Preview the production build locally.
 
-### 构建
-```bash
-npm run build
-```
+There are no test or lint scripts configured in this project.
 
-## 应用功能
+## Architecture
 
-### 阶段一：分割模式
-- 上传并显示素描图像
-- 使用魔棒工具（Flood Fill）点击选择相似颜色区域
-- 调整阈值控制选择范围
-- 为选中的掩码命名
-- 管理多个掩码（添加、删除、显示/隐藏）
+**Stack**: Vue 3 (Composition API, `<script setup>`) + TypeScript + Vite.
 
-### 阶段二：填充模式
-- 点击图像检测所属掩码
-- 弹出调色板选择颜色
-- 调色板包含 Light/Dark 两类颜色
-- 支持多个区域同时显示不同填充色
+**Application goal**: A sketch coloring tool with two modes:
+- `segment` — Flood-fill ("magic wand") selection of similar-color regions to create masks.
+- `fill` — Click a mask to apply a color from a light/dark palette.
 
-## 核心组件
+### State & Data Flow
 
-| 组件 | 路径 | 功能 |
-|------|------|------|
-| ImageCanvas | `src/components/ImageCanvas.vue` | 主画布，图像渲染、缩放、点击交互 |
-| MaskPanel | `src/components/MaskPanel.vue` | 掩码列表管理 |
-| ColorPalette | `src/components/ColorPalette.vue` | 调色板弹窗 |
-| ModeSwitcher | `src/components/ModeSwitcher.vue` | 模式切换控件 |
-| ThresholdSlider | `src/components/ThresholdSlider.vue` | 魔棒阈值滑块 |
+`App.vue` is the central coordinator. It holds the uploaded `ImageData`, the current `mode`, the `threshold` for flood fill, and the selected mask for filling. It delegates domain logic to composables and passes derived state down to view components.
 
-## Composables
+### Coordinate Systems
 
-| Composable | 路径 | 功能 |
-|------------|------|------|
-| useFloodFill | `src/composables/useFloodFill.ts` | 魔棒算法（BFS Flood Fill） |
-| useImageScale | `src/composables/useImageScale.ts` | 图像缩放和坐标转换 |
-| useMasks | `src/composables/useMasks.ts` | 掩码状态管理 |
+All masks are stored in **original image coordinates** as `Set<number>` where each value is the flattened pixel index `y * width + x`.
 
-## 调色板颜色
+`ImageCanvas.vue` emits `pixelClick` as **screen coordinates** (`{x, y}` relative to the canvas element). `App.vue` converts these to image coordinates via `useImageScale().screenToImage()` before running flood fill or mask lookup. Any canvas rendering that draws masks also applies `ctx.translate(offset.x, offset.y)` and `ctx.scale(scale, scale)` so masks are drawn in image space.
 
-### Light
-- pink: #FFB6C1, yellow: #FFFFE0, green: #90EE90
-- blue: #ADD8E6, red: #FFA07A, purple: #DDA0DD
-- gray: #D3D3D3, orange: #FFDAB9, brown: #D2B48C
-- white: #FFFFFF
+### Performance Design
 
-### Dark
-- pink: #C71585, yellow: #FFD700, green: #228B22
-- blue: #0000CD, red: #8B0000, purple: #800080
-- gray: #696969, orange: #FF8C00, brown: #8B4513
-- black: #000000
+- **Reverse index**: `useMasks` maintains a `pixelToMask` Map for O(1) lookup of which mask owns a given pixel index. When pixels are added to a mask, they are first removed from any previous mask.
+- **Screen-space caching**: `useScreenMasks` precomputes a screen-coordinate representation of visible masks (including bounds and a `Set<string>` of `"x,y"` pixels). It invalidates this cache when `scale` or `offset` changes and regenerates it on the next hit-test. This avoids repeated per-pixel coordinate math during fill-mode interaction.
 
-## 关键数据结构
+### Rendering
 
-```typescript
-interface Mask {
-  id: string
-  name: string
-  pixels: Set<number>  // 扁平化像素索引 (y * width + x)
-  fillColor: string | null
-  visible: boolean
-}
-```
+`ImageCanvas` renders everything on a 2D canvas:
+1. Creates an offscreen temporary canvas to hold the uploaded `ImageData`.
+2. Draws the image through the current transform.
+3. Draws mask overlays by iterating `mask.pixels` and calling `ctx.fillRect(x, y, 1, 1)` for each pixel.
+   - Active mask in `segment` mode is tinted light blue.
+   - Filled masks draw their `fillColor` at 50% opacity.
 
-## 注意事项
+### Mode Behaviors
 
-1. **坐标转换**: 所有点击事件的屏幕坐标必须转换为原始图像坐标
-2. **缩放处理**: 掩码基于原始图像尺寸，渲染时按当前缩放比例绘制
-3. **性能**: 使用 Set 存储像素索引，Map 建立像素到掩码的反向索引
-4. **图像自适应**: 图片应自适应容器，用户无需滚动查看完整图像
+- **Segment mode**: Clicking an unmasked pixel runs flood fill and either creates a new mask or adds pixels to the currently active mask. If the user zooms while a mask is active (`segmentStartScale` tracks this), the active mask is automatically deselected.
+- **Fill mode**: Clicking deselects the previous fill target and selects the mask under the cursor. `ColorPalette` applies the chosen color to `clickedMaskId`.
+
+### Key Files
+
+- `src/App.vue` — Top-level state and mode switching.
+- `src/components/ImageCanvas.vue` — Canvas rendering, panning, zooming, and click emit.
+- `src/composables/useFloodFill.ts` — BFS flood fill using 8-connected neighbors and squared Euclidean color distance against a threshold.
+- `src/composables/useMasks.ts` — Mask CRUD, reverse index, and pixel ownership rules.
+- `src/composables/useImageScale.ts` — Container-to-image coordinate math and zoom state.
+- `src/composables/useScreenMasks.ts` — Screen-coordinate cache for fast hit-testing.
+- `src/types/index.ts` — Core types including `Mask`, `Mode`, and `Point`.
+- `src/utils/color.ts` — Pixel color extraction, distance helpers, and the palette definition.

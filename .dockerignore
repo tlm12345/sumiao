@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log*
+dist
+.vscode
+.idea
+.git
+.github
+*.md
+!CLAUDE.md
+.eslintrc
+.prettierrc
+.editorconfig
